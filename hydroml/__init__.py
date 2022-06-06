@@ -1,3 +1,3 @@
-import scalers
-import loss
-import process_heads
+from . import scalers
+from . import loss
+from . import process_heads
