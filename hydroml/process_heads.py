@@ -22,28 +22,14 @@ class SaturationHead(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, pressure, a=None, n=None, s_sat=1.0, s_res=0.001):
+    def forward(self, pressure, a=None, n=None, s_sat=1.0, s_res=0.0001):
         """
         Forward mode runs prediction directly
         """
-        #if x.shape[0] == 5:
-        #    # x contains pressure and all parameters
-        #    pressure = x[0]
-        #    a = x[1]
-        #    n = x[2]
-        #    s_sat = x[3]
-        #    s_res = x[4]
-        #elif x.shape[3] == 3:
-        #    # x contains pressure and a, n parameters
-        #    pressure = x[0]
-        #    a = x[1]
-        #    n = x[2]
-        #else:
-        #    assert (a is not None) and (n is not None), 'Must provide values of a and n!'
-
-        saturation = (
-            ((s_sat - s_res) / ( (1+(a*pressure)**n) ** (1-1/n) )) + s_res
-        )
+        x = (1 - (a * pressure)) ** n
+        sgn_x = torch.sign(x)
+        scaled_x = torch.abs(x) ** (-1/n)
+        saturation = ((s_sat - s_res) * (sgn_x * scaled_x)) + s_res
         saturation = torch.clamp(saturation, 0.0, 1.0)
         saturation = torch.nan_to_num(saturation, 1.0)
         return saturation
