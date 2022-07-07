@@ -22,28 +22,14 @@ class SaturationHead(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, pressure, a=None, n=None, s_sat=1.0, s_res=0.001):
+    def forward(self, pressure, a=None, n=None, s_sat=1.0, s_res=0.0001):
         """
         Forward mode runs prediction directly
         """
-        #if x.shape[0] == 5:
-        #    # x contains pressure and all parameters
-        #    pressure = x[0]
-        #    a = x[1]
-        #    n = x[2]
-        #    s_sat = x[3]
-        #    s_res = x[4]
-        #elif x.shape[3] == 3:
-        #    # x contains pressure and a, n parameters
-        #    pressure = x[0]
-        #    a = x[1]
-        #    n = x[2]
-        #else:
-        #    assert (a is not None) and (n is not None), 'Must provide values of a and n!'
-
-        saturation = (
-            ((s_sat - s_res) / ( (1+(a*pressure)**n) ** (1-1/n) )) + s_res
-        )
+        x = (1 - (a * pressure)) ** n
+        sgn_x = torch.sign(x)
+        scaled_x = torch.abs(x) ** (-1/n)
+        saturation = ((s_sat - s_res) * (sgn_x * scaled_x)) + s_res
         saturation = torch.clamp(saturation, 0.0, 1.0)
         saturation = torch.nan_to_num(saturation, 1.0)
         return saturation
@@ -209,6 +195,7 @@ class OverlandFlowHead(nn.Module):
 
     def _overland_flow(self,pressure_top, slopex, slopey, mannings, dx, dy):
         # Calculate fluxes across east and north faces
+        zero = torch.tensor(0)
 
         # ---------------
         # The x direction
@@ -216,31 +203,32 @@ class OverlandFlowHead(nn.Module):
         qx = -(torch.sign(slopex) * (torch.abs(slopex) ** 0.5) / mannings) * (pressure_top ** (5 / 3)) * dy
 
         # Upwinding to get flux across the east face of cells - based on qx[i] if it is positive and qx[i+1] if negative
-        qeast = torch.maximum(torch.tensor(0), qx[:, :-1]) - torch.maximum(torch.tensor(0), -qx[:, 1:])
+        qeast = (torch.maximum(zero, qx[:, :, :-1])
+                - torch.maximum(zero, -qx[:, :, 1:]))
 
         # Add the left boundary - pressures outside domain are 0 so flux across this boundary only occurs when
         # qx[0] is negative
-        qeast = torch.hstack([-torch.maximum(torch.tensor(0), -qx[:, 0])[:, None], qeast])
-
-        # Add the right boundary - pressures outside domain are 0 so flux across this boundary only occurs when
-        # qx[-1] is positive
-        qeast = torch.hstack([qeast, torch.maximum(torch.tensor(0), qx[:, -1])[:, None]])
+        qeast = torch.cat([
+            -torch.maximum(zero, -qx[:, :, slice(0, 1)]),
+            qeast,
+            torch.maximum(zero, qx[:, :, slice(-1, None)])
+        ], dim=2)
 
         # ---------------
         # The y direction
         # ---------------
         qy = -(torch.sign(slopey) * (torch.abs(slopey) ** 0.5) / mannings) * (pressure_top ** (5 / 3)) * dx
         # Upwinding to get flux across the north face of cells - based in qy[j] if it is positive and qy[j+1] if negative
-        qnorth = torch.maximum(torch.tensor(0), qy[:-1, :]) - torch.maximum(torch.tensor(0), -qy[1:, :])
+        qnorth = (torch.maximum(zero, qy[:, :-1, :])
+                - torch.maximum(zero, -qy[:, 1:, :]))
 
-        # Add the top boundary - pressures outside domain are 0 so flux across this boundary only occurs when
-        # qy[0] is negative
-        qnorth = torch.vstack([-torch.maximum(torch.tensor(0), -qy[0, :]), qnorth])
-
-        # Add the bottom boundary - pressures outside domain are 0 so flux across this boundary only occurs when
-        # qy[-1] is positive
-        qnorth = torch.vstack([qnorth, torch.maximum(torch.tensor(0), qy[-1, :])])
-
+        # Add the top and bottom boundary - pressures outside domain
+        # are 0 so flux across this boundary only occurs when qy[0] is negative
+        qnorth = torch.cat([
+            -torch.maximum(zero, -qy[:, slice(0, 1), :]),
+            qnorth,
+            torch.maximum(zero, qy[:, slice(-1, None), :])
+        ], dim=1)
         return qeast, qnorth
 
 
@@ -327,20 +315,29 @@ class OverlandFlowHead(nn.Module):
         """
 
         if mask is None:
-                mask = torch.ones_like(pressure)
+            mask = torch.ones_like(pressure[slice(0,1), ...])
 
         mask = torch.where(mask > 0, torch.tensor(1), torch.tensor(0))
-        qeast, qnorth = self.calculate_overland_fluxes(pressure, slopex, slopey, mannings, dx, dy, flow_method=flow_method,
-                                                   mask=mask)
+        qeast, qnorth = self.calculate_overland_fluxes(
+            pressure,
+            slopex,
+            slopey,
+            mannings,
+            dx,
+            dy,
+            flow_method=flow_method,
+            mask=mask
+        )
 
         # Outflow is a positive qeast[i,j+1] or qnorth[i+1,j] or a negative qeast[i,j], qnorth[i,j]
-        outflow = torch.maximum(torch.tensor(0), qeast[:, 1:]) + torch.maximum(torch.tensor(0), -qeast[:, :-1]) + \
-                  torch.maximum(torch.tensor(0), qnorth[1:, :]) + torch.maximum(torch.tensor(0), -qnorth[:-1, :])
-
+        outflow = (torch.maximum(torch.tensor(0), qeast[:, :, 1:])
+                + torch.maximum(torch.tensor(0), -qeast[:, :, :-1])
+                + torch.maximum(torch.tensor(0), qnorth[:, 1:, :])
+                + torch.maximum(torch.tensor(0), -qnorth[:, :-1, :]))
         # Set the outflow values outside the mask to 0
-        outflow[mask[-1, ...] == 0] = 0
+        outflow[mask[slice(-1, None), ...] == 0] = 0
 
-        return outflow
+        return outflow.squeeze()
 
 
     def calculate_overland_flow(
