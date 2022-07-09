@@ -10,9 +10,9 @@ def from_defaults(defaults):
     return {k: cls(**kwargs) for k, (cls, kwargs) in defaults.items()}
 
 
-def save_scalers(scalers, path):
+def save_scalers(scaler_values, path):
     scaler_dict = {}
-    for name, scaler in scalers.items():
+    for name, scaler in scaler_values.items():
         scaler_dict[name] = (scaler.__class__, vars(scaler))
     f = open(path, 'wb')
     dill.dump(scaler_dict, f)
@@ -21,9 +21,9 @@ def save_scalers(scalers, path):
 
 def load_scalers(path):
     f = open(path, 'rb')
-    scalers = dill.load(f)
+    scaler_values = dill.load(f)
     f.close()
-    return from_defaults(scalers)
+    return from_defaults(scaler_values)
 
 
 class BaseScaler:
@@ -167,8 +167,8 @@ class CompositeScaler(BaseScaler):
     CompositeScalers can be used to apply multiple transforms
     """
 
-    def __init__(self, scalers=[]):
-        self.scalers = scalers
+    def __init__(self, scaler_values=[]):
+        self.scalers = scaler_values
 
     def fit(self, x):
         for s in self.scalers:
