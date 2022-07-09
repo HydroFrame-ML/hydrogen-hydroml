@@ -2,6 +2,7 @@ import torch
 import mlflow
 import numpy as np
 import pandas as pd
+from glob import glob
 from tqdm.autonotebook import tqdm
 from pytorch_lightning import Callback
 from pytorch_lightning.callbacks.progress import ProgressBar
@@ -45,6 +46,12 @@ class LitProgressBar(ProgressBar):
         return bar
 
 
+def step_of_checkpoint(path):
+    base = path.split('=')[-1]
+    step_number = base.split('.')[0]
+    return int(step_number)
+
+
 def find_best_checkpoint(
     log_dir,
     experiment_name,
@@ -79,3 +86,28 @@ def find_best_checkpoint(
     checkpoint_file = f'epoch={current_epoch}-step={best_step}.ckpt'
     best_checkpoint = f'{checkpoint_dir}/{checkpoint_file}'
     return best_checkpoint
+
+
+def find_last_checkpoint(
+    log_dir,
+    experiment_name,
+    uri_scheme='file:',
+    uri_authority='',
+):
+    tracking_uri = f'{uri_scheme}{uri_authority}{log_dir}'
+    mlflow.set_tracking_uri(tracking_uri)
+    client = mlflow.tracking.MlflowClient()
+
+    experiment = client.get_experiment_by_name(experiment_name)
+    experiment_id = experiment.experiment_id
+    runs = client.list_run_infos(experiment_id)
+    # Assumes first run is current and second is the most recently completed
+    test_run = runs[1]
+    run_id = test_run.run_id
+    run_path = f'{log_dir}/{experiment_id}/{run_id}'
+    run_dict = mlflow.get_run(run_id).to_dictionary()
+    checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
+    checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'))
+    last_checkpoint = checkpoints[-1]
+    return last_checkpoint
+
