@@ -64,7 +64,9 @@ class WaterTableDepthHead(nn.Module):
         dz = torch.hstack([dz, torch.tensor(0)])
         # An unsaturated layer at the top
         # pad_width is a tuple of (n_before, n_after) for each dimension
-        saturation = torch.nn.functional.pad(saturation, ((0, 0, 0, 0, 0, 1)), mode='constant', value=0)
+        saturation = F.pad(
+            saturation, ((0, 0, 0, 0, 0, 1)), mode='constant', value=0
+        )
 
         # Elevation of the center of each layer from the bottom (bottom layer to top layer)
         _elevation = torch.cumsum(dz,dim=0) - (dz / 2)
@@ -133,27 +135,47 @@ class SurfaceStorageHead(nn.Module):
 class OverlandFlowHead(nn.Module):
     """
     Calculate Overland Flow
-    Adapted as directly as possible from pftools, note that all overland flow related functions are methods of this class
+    Adapted as directly as possible from pftools, note that all overland
+    flow related functions are methods of this class
     """
-    def __init__(self,epsilon=torch.tensor(1e-5)):
-        self.epsilon = epsilon
+    def __init__(self, epsilon=torch.tensor(1e-5)):
         super().__init__()
+        self.epsilon = epsilon
 
 
-    def _overland_flow_kinematic(self,mask, pressure_top, slopex, slopey, mannings, dx, dy):
-        # We will be tweaking the slope values for this algorithm, so we make a copy
+    def _overland_flow_kinematic(
+        self,
+        pressure_top,
+        slopex,
+        slopey,
+        mannings,
+        dx,
+        dy,
+        mask=None,
+    ):
+        """
+        Kinematic
+        """
+        ny, nx = pressure_top.shape
+        # We will be tweaking the slope values so we make a copy
         slopex = torch.clone(slopex)
         slopey = torch.clone(slopey)
 
         # We're only interested in the surface mask, as an ny-by-nx array
-        mask = mask[-1, ...]
+        if mask is None:
+            mask = torch.ones_like(pressure_top)
+        mask = torch.where(
+            mask > torch.tensor(0),
+            torch.tensor(1),
+            torch.tensor(0)
+        )
 
         # Find all patterns of the form
         #  -------
         # | 0 | 1 |
         #  -------
         # and copy the slopex values from the '1' cells to the corresponding '0' cells
-        _x, _y = torch.where(torch.diff(mask, append = torch.zeros((1888,1)), dim=1) == 1)
+        _x, _y = torch.where(torch.diff(mask, append=torch.zeros((ny,1)), dim=1) == 1)
         slopex[(_x, _y)] = slopex[(_x, _y + 1)]
 
         # Find all patterns of the form
@@ -162,7 +184,7 @@ class OverlandFlowHead(nn.Module):
         # | 1 |
         #  ---
         # and copy the slopey values from the '1' cells to the corresponding '0' cells
-        _x, _y = torch.where(torch.diff(mask, append = torch.zeros((1,3342)), dim=0) == 1)
+        _x, _y = torch.where(torch.diff(mask, append=torch.zeros((1,nx)), dim=0) == 1)
         slopey[(_x, _y)] = slopey[(_x + 1, _y)]
 
         slope = torch.maximum(self.epsilon, torch.hypot(slopex, slopey))
@@ -170,11 +192,15 @@ class OverlandFlowHead(nn.Module):
         # Upwind pressure - this is for the north and east face of all cells
         # The slopes are calculated across these boundaries so the upper x/y boundaries are included in these
         # calculations. The lower x/y boundaries are added further down as q_x0/q_y0
-        pressure_top_padded = torch.nn.functional.pad(pressure_top[:, 1:], (0, 1, 0, 0))  # pad right
-        pupwindx = torch.maximum(torch.tensor(0), torch.sign(slopex) * pressure_top_padded) + torch.maximum(torch.tensor(0), -torch.sign(slopex) * pressure_top)
+        pressure_top_padded = F.pad(pressure_top[:, 1:], (0, 1, 0, 0))  # pad right
+        sgn_x = torch.sign(slopex)
+        pupwindx = (torch.maximum(torch.tensor(0), sgn_x * pressure_top_padded)
+                    + torch.maximum(torch.tensor(0), -sgn_x * pressure_top))
 
-        pressure_top_padded = torch.nn.functional.pad(pressure_top[1:, :], (0, 0, 0, 1))  # pad bottom
-        pupwindy = torch.maximum(torch.tensor(0), torch.sign(slopey) * pressure_top_padded) + torch.maximum(torch.tensor(0), -torch.sign(slopey) * pressure_top)
+        sgn_y = torch.sign(slopey)
+        pressure_top_padded = F.pad(pressure_top[1:, :], (0, 0, 0, 1))  # pad bottom
+        pupwindy = (torch.maximum(torch.tensor(0), sgn_y * pressure_top_padded)
+                    + torch.maximum(torch.tensor(0), -sgn_y * pressure_top))
 
         flux_factor = torch.sqrt(slope) * mannings
         # Flux across the x/y directions
@@ -183,57 +209,75 @@ class OverlandFlowHead(nn.Module):
 
         # Fix the lower x boundary
         # Use the slopes of the first column
-        q_x0 = -slopex[:, 0] / flux_factor[:, 0] * torch.maximum(torch.tensor(0), torch.sign(slopex[:, 0]) * pressure_top[:, 0]) ** (5 / 3) * dy
+        px = torch.maximum(torch.tensor(0), torch.sign(slopex[:, 0]) * pressure_top[:, 0])
+        q_x0 = -slopex[:, 0] / flux_factor[:, 0] *  px ** (5 / 3) * dy
         qeast = torch.hstack([q_x0[:, np.newaxis], q_x])
 
         # Fix the lower y boundary
         # Use the slopes of the first row
-        q_y0 = -slopey[0, :] / flux_factor[0, :] * torch.maximum(torch.tensor(0), torch.sign(slopey[0, :]) * pressure_top[0, :]) ** (5 / 3) * dx
+        py = torch.maximum(torch.tensor(0), torch.sign(slopey[0, :]) * pressure_top[0, :])
+        q_y0 = -slopey[0, :] / flux_factor[0, :] * py ** (5 / 3) * dx
         qnorth = torch.vstack([q_y0, q_y])
 
         return qeast, qnorth
 
-    def _overland_flow(self,pressure_top, slopex, slopey, mannings, dx, dy):
+    def _overland_flow(self, pressure_top, slopex, slopey, mannings, dx, dy):
+        """
+        Default implementation of overland flow
+        """
         # Calculate fluxes across east and north faces
         zero = torch.tensor(0)
 
         # ---------------
         # The x direction
         # ---------------
-        qx = -(torch.sign(slopex) * (torch.abs(slopex) ** 0.5) / mannings) * (pressure_top ** (5 / 3)) * dy
+        qx = -((torch.sign(slopex) * (torch.abs(slopex) ** 0.5) / mannings)
+               * (pressure_top ** (5 / 3)) * dy)
 
-        # Upwinding to get flux across the east face of cells - based on qx[i] if it is positive and qx[i+1] if negative
-        qeast = (torch.maximum(zero, qx[:, :, :-1])
-                - torch.maximum(zero, -qx[:, :, 1:]))
+        # Upwinding to get flux across the east face of cells
+        # based on qx[i] if it is positive and qx[i+1] if negative
+        qeast = (torch.maximum(zero, qx[:, :-1])
+                 - torch.maximum(zero, -qx[:, 1:]))
 
-        # Add the left boundary - pressures outside domain are 0 so flux across this boundary only occurs when
-        # qx[0] is negative
+        # Add the left boundary - pressures outside domain are 0 so flux
+        # across this boundary only occurs when qx[0] is negative
         qeast = torch.cat([
-            -torch.maximum(zero, -qx[:, :, slice(0, 1)]),
+            -torch.maximum(zero, -qx[:, slice(0, 1)]),
             qeast,
-            torch.maximum(zero, qx[:, :, slice(-1, None)])
-        ], dim=2)
+            torch.maximum(zero, qx[:, slice(-1, None)])
+        ], dim=1)
 
         # ---------------
         # The y direction
         # ---------------
-        qy = -(torch.sign(slopey) * (torch.abs(slopey) ** 0.5) / mannings) * (pressure_top ** (5 / 3)) * dx
-        # Upwinding to get flux across the north face of cells - based in qy[j] if it is positive and qy[j+1] if negative
-        qnorth = (torch.maximum(zero, qy[:, :-1, :])
-                - torch.maximum(zero, -qy[:, 1:, :]))
+        qy = -((torch.sign(slopey) * (torch.abs(slopey) ** 0.5) / mannings)
+               * (pressure_top ** (5 / 3)) * dx)
+        # Upwinding to get flux across the north face of cells
+        # based in qy[j] if it is positive and qy[j+1] if negative
+        qnorth = (torch.maximum(zero, qy[:-1, :])
+                  - torch.maximum(zero, -qy[1:, :]))
 
         # Add the top and bottom boundary - pressures outside domain
         # are 0 so flux across this boundary only occurs when qy[0] is negative
         qnorth = torch.cat([
-            -torch.maximum(zero, -qy[:, slice(0, 1), :]),
+            -torch.maximum(zero, -qy[slice(0, 1), :]),
             qnorth,
-            torch.maximum(zero, qy[:, slice(-1, None), :])
-        ], dim=1)
+            torch.maximum(zero, qy[slice(-1, None), :])
+        ], dim=0)
         return qeast, qnorth
 
 
-    def calculate_overland_fluxes(self, pressure, slopex, slopey, mannings, dx, dy, flow_method='OverlandKinematic',
-                                  mask=None):
+    def calculate_overland_fluxes(
+        self,
+        pressure,
+        slopex,
+        slopey,
+        mannings,
+        dx,
+        dy,
+        flow_method='OverlandKinematic',
+        mask=None
+    ):
         """
         Calculate overland fluxes across grid faces
         :param pressure: A nz-by-ny-by-nx ndarray of pressure values (bottom layer to top layer)
@@ -280,23 +324,33 @@ class OverlandFlowHead(nn.Module):
         pressure_top = torch.nan_to_num(pressure_top)
         pressure_top[pressure_top < 0] = 0
 
-        assert flow_method in ('OverlandFlow', 'OverlandKinematic'), 'Unknown flow method'
+        assert flow_method in ('OverlandFlow', 'OverlandKinematic'), (
+                'Unknown flow method')
         if flow_method == 'OverlandKinematic':
-            if mask is None:
-                mask = torch.ones_like(pressure)
-               # mask = mask[None, :]
-            mask = torch.where(mask > torch.tensor(0), torch.tensor(1), torch.tensor(0))
-            qeast, qnorth = self._overland_flow_kinematic(mask, pressure_top, slopex, slopey, mannings, dx, dy)
+            qeast, qnorth = self._overland_flow_kinematic(
+                pressure_top, slopex, slopey, mannings, dx, dy, mask
+            )
         else:
-            qeast, qnorth = self._overland_flow(pressure_top, slopex, slopey, mannings, dx, dy)
+            qeast, qnorth = self._overland_flow(
+                pressure_top, slopex, slopey, mannings, dx, dy
+            )
 
         return qeast, qnorth
 
 
     # -----------------------------------------------------------------------------
 
-    def calculate_overland_flow_grid(self,pressure, slopex, slopey, mannings, dx, dy, flow_method='OverlandKinematic',
-                                     mask=None):
+    def calculate_overland_flow_grid(
+        self,
+        pressure,
+        slopex,
+        slopey,
+        mannings,
+        dx,
+        dy,
+        flow_method='OverlandKinematic',
+        mask=None
+    ):
         """
         Calculate overland outflow per grid cell of a domain
         :param pressure: A nz-by-ny-by-nx ndarray of pressure values (bottom layer to top layer)
@@ -314,10 +368,6 @@ class OverlandFlowHead(nn.Module):
         :return: A ny-by-nx ndarray of overland flow values
         """
 
-        if mask is None:
-            mask = torch.ones_like(pressure[slice(0,1), ...])
-
-        mask = torch.where(mask > 0, torch.tensor(1), torch.tensor(0))
         qeast, qnorth = self.calculate_overland_fluxes(
             pressure,
             slopex,
@@ -330,14 +380,16 @@ class OverlandFlowHead(nn.Module):
         )
 
         # Outflow is a positive qeast[i,j+1] or qnorth[i+1,j] or a negative qeast[i,j], qnorth[i,j]
-        outflow = (torch.maximum(torch.tensor(0), qeast[:, :, 1:])
-                + torch.maximum(torch.tensor(0), -qeast[:, :, :-1])
-                + torch.maximum(torch.tensor(0), qnorth[:, 1:, :])
-                + torch.maximum(torch.tensor(0), -qnorth[:, :-1, :]))
-        # Set the outflow values outside the mask to 0
-        outflow[mask[slice(-1, None), ...] == 0] = 0
-
-        return outflow.squeeze()
+        outflow = (torch.maximum(torch.tensor(0), qeast[:, 1:])
+                + torch.maximum(torch.tensor(0), -qeast[:, :-1])
+                + torch.maximum(torch.tensor(0), qnorth[1:, :])
+                + torch.maximum(torch.tensor(0), -qnorth[:-1, :]))
+        if mask is not None:
+            # Set the outflow values outside the mask to 0
+            if len(mask.shape) == 3:
+                mask = mask[-1, ...]
+            outflow[mask == 0] = 0
+        return outflow
 
 
     def calculate_overland_flow(
@@ -367,12 +419,24 @@ class OverlandFlowHead(nn.Module):
             If None, assumed to be an nz-by-ny-by-nx ndarray of 1s.
         :return: A ny-by-nx ndarray of overland flow values
         """
-        qeast, qnorth = self.calculate_overland_fluxes(pressure, slopex, slopey, mannings, dx, dy, flow_method=flow_method,
-                                                  mask=mask)
+        nz, nx, ny = pressure.shape
+        qeast, qnorth = self.calculate_overland_fluxes(
+            pressure,
+            slopex,
+            slopey,
+            mannings,
+            dx,
+            dy,
+            flow_method=flow_method,
+            mask=mask
+        )
 
         if mask is not None:
             mask = torch.where(mask > 0, torch.tensor(1), torch.tensor(0))
-            surface_mask = mask[-1, ...]  # shape ny, nx
+            if len(mask.shape) == 3:
+                surface_mask = mask[-1, ...]  # shape ny, nx
+            else:
+                surface_mask = mask
         else:
             surface_mask = torch.ones_like(slopex)  # shape ny, nx
 
@@ -383,29 +447,70 @@ class OverlandFlowHead(nn.Module):
         # All of these have shape (ny, nx) and values as 0/1
 
         # find forward difference of +1 on axis 0
-        edge_south = torch.maximum(torch.tensor(0), torch.diff(surface_mask, dim=0, prepend=torch.zeros((1,3342))))
+        edge_south = torch.maximum(
+            torch.tensor(0),
+            torch.diff(surface_mask, dim=0, prepend=torch.zeros((1,nx)))
+        )
         # find forward difference of -1 on axis 0
-        edge_north = torch.maximum(torch.tensor(0), -torch.diff(surface_mask, dim=0, append=torch.zeros((1,3342))))
+        edge_north = torch.maximum(
+            torch.tensor(0),
+            -torch.diff(surface_mask, dim=0, append=torch.zeros((1,nx)))
+        )
         # find forward difference of +1 on axis 1
-        edge_west = torch.maximum(torch.tensor(0), torch.diff(surface_mask, dim=1, prepend=torch.zeros((1888,1))))
+        edge_west = torch.maximum(
+            torch.tensor(0),
+            torch.diff(surface_mask, dim=1, prepend=torch.zeros((ny,1)))
+        )
         # find forward difference of -1 on axis 1
-        edge_east = torch.maximum(torch.tensor(0), -torch.diff(surface_mask, dim=1, append=torch.zeros((1888,1))))
+        edge_east = torch.maximum(
+            torch.tensor(0),
+            -torch.diff(surface_mask, dim=1, append=torch.zeros((ny,1)))
+        )
 
         # North flux is the sum of +ve qnorth values (shifted up by one) on north edges
-        flux_north = torch.sum(torch.maximum(torch.tensor(0), torch.roll(qnorth, -1, dims=0)[torch.where(edge_north == 1)]))
+        flux_north = torch.sum(torch.maximum(
+            torch.tensor(0),
+            torch.roll(qnorth, -1, dims=0)[torch.where(edge_north == 1)]
+        ))
         # South flux is the negated sum of -ve qnorth values for south edges
-        flux_south = torch.sum(torch.maximum(torch.tensor(0), -qnorth[torch.where(edge_south == 1)]))
+        flux_south = torch.sum(torch.maximum(
+            torch.tensor(0),
+            -qnorth[torch.where(edge_south == 1)]
+        ))
         # West flux is the negated sum of -ve qeast values of west edges
-        flux_west = torch.sum(torch.maximum(torch.tensor(0), -qeast[torch.where(edge_west == 1)]))
+        flux_west = torch.sum(torch.maximum(
+            torch.tensor(0),
+            -qeast[torch.where(edge_west == 1)]
+        ))
         # East flux is the sum of +ve qeast values (shifted left by one) for east edges
-        flux_east = torch.sum(torch.maximum(torch.tensor(0), torch.roll(qeast, -1, dims=1)[torch.where(edge_east == 1)]))
+        flux_east = torch.sum(torch.maximum(
+            torch.tensor(0),
+            torch.roll(qeast, -1, dims=1)[torch.where(edge_east == 1)]
+        ))
 
         flux = flux_north + flux_south + flux_west + flux_east
-        return flux#flux_north,flux_south,flux_west,flux_east#,surface_mask
+        return flux
 
-    def forward(self,pressure, slopex, slopey, mannings, dx, dy, flow_method='OverlandKinematic',
-                                     mask=None):
+    def forward(
+        self,
+        pressure,
+        slopex,
+        slopey,
+        mannings,
+        dx,
+        dy,
+        flow_method='OverlandKinematic',
+        mask=None
+    ):
         #default forward is grid, use other methods if you want something else...
-        return self.calculate_overland_flow_grid(pressure, slopex, slopey, mannings, dx, dy, flow_method=flow_method,
-                                     mask=mask)
+        return self.calculate_overland_flow_grid(
+            pressure,
+            slopex,
+            slopey,
+            mannings,
+            dx,
+            dy,
+            flow_method=flow_method,
+            mask=mask
+        )
 
