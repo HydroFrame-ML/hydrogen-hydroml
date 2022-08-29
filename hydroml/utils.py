@@ -88,7 +88,7 @@ def find_best_checkpoint(
     return best_checkpoint
 
 
-def find_last_checkpoint(
+def find_resume_checkpoint(
     log_dir,
     experiment_name,
     uri_scheme='file:',
@@ -108,6 +108,68 @@ def find_last_checkpoint(
     run_dict = mlflow.get_run(run_id).to_dictionary()
     checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
     checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'))
+    resume_checkpoint = checkpoints[-1]
+    return resume_checkpoint
+
+
+def find_last_checkpoint(
+    log_dir,
+    experiment_name,
+    uri_scheme='file:',
+    uri_authority='',
+):
+    tracking_uri = f'{uri_scheme}{uri_authority}{log_dir}'
+    mlflow.set_tracking_uri(tracking_uri)
+    client = mlflow.tracking.MlflowClient()
+
+    experiment = client.get_experiment_by_name(experiment_name)
+    experiment_id = experiment.experiment_id
+    runs = client.list_run_infos(experiment_id)
+    latest = np.argmax([r.start_time for r in runs])
+    test_run = runs[latest]
+    run_id = test_run.run_id
+    run_path = f'{log_dir}/{experiment_id}/{run_id}'
+    run_dict = mlflow.get_run(run_id).to_dictionary()
+    checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
+    checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'))
     last_checkpoint = checkpoints[-1]
     return last_checkpoint
 
+
+def get_full_metric_df(
+    log_dir,
+    experiment_name,
+    metric_name='train_loss',
+    uri_scheme='file:',
+    uri_authority='',
+):
+    tracking_uri = f'{uri_scheme}{uri_authority}{log_dir}'
+    mlflow.set_tracking_uri(tracking_uri)
+    client = mlflow.tracking.MlflowClient()
+
+    experiment = client.get_experiment_by_name(experiment_name)
+    experiment_id = experiment.experiment_id
+    runs = client.list_run_infos(experiment_id)
+    run_ids = [r.run_id for r in runs]
+    start_times = [r.start_time for r in runs]
+
+    sorted_idx = np.argsort(start_times)
+    sorted_ids = [run_ids[i] for i in sorted_idx]
+    iter_count = 0
+    df_list = []
+    for run_id in sorted_ids:
+        run_path = f'{log_dir}/{experiment_id}/{run_id}'
+        loss_file = f'{run_path}/metrics/train_loss'
+        df = pd.read_csv(
+            loss_file,
+            delim_whitespace=True,
+            header=None,
+            index_col=2,
+            names=['time', 'train_loss']
+        )
+        df.index += iter_count
+        iter_count = df.iloc[-1].name
+        df_list.append(df)
+
+    df = pd.concat(df_list)
+    return df
