@@ -46,7 +46,7 @@ class OneHotScaler(BaseScaler):
         self.num_classes = torch.max(x)
 
     def transform(self, x):
-        x = torch.tensor(np.array(x))
+        x = torch.tensor(np.array(x, dtype=np.int64))
         oh = F.one_hot(x, num_classes=self.num_classes)
         oh = oh.permute(tuple(np.roll(np.arange(oh.ndim), 1)))
         return oh.numpy()
