@@ -5,7 +5,7 @@ import pandas as pd
 from glob import glob
 from tqdm.autonotebook import tqdm
 from pytorch_lightning import Callback
-from pytorch_lightning.callbacks.progress import ProgressBar
+from pytorch_lightning.callbacks import TQDMProgressBar
 
 def multiply_along_axis(A, B, axis, module=torch):
     return module.swapaxes(module.swapaxes(A, axis, -1) * B, -1, axis)
@@ -36,7 +36,7 @@ class MetricsCallback(Callback):
         return x
 
 
-class LitProgressBar(ProgressBar):
+class LitProgressBar(TQDMProgressBar):
     """
     This just avoids a bug in the progress bar for pytorch lightning
     that causes the progress bar to creep down the notebook
