@@ -1,9 +1,11 @@
 import os
+import numpy as np
 import scipy.stats
 import torch
 import xarray as xr
 import pickle
 import dill
+import torch.nn.functional as F
 
 
 def from_defaults(defaults):
@@ -32,6 +34,26 @@ class BaseScaler:
     def fit_transform(self, x):
         self.fit(x)
         return self.transform(x)
+
+
+class OneHotScaler(BaseScaler):
+
+    def __init__(self, num_classes=-1):
+        super().__init__()
+        self.num_classes = num_classes
+
+    def fit(self, x):
+        self.num_classes = torch.max(x)
+
+    def transform(self, x):
+        x = torch.tensor(np.array(x, dtype=np.int64))
+        oh = F.one_hot(x, num_classes=self.num_classes)
+        oh = oh.permute(tuple(np.roll(np.arange(oh.ndim), 1)))
+        return oh.numpy()
+
+    def inverse_transform(self, x):
+        """Probably can be implemented with torch.argmax"""
+        raise NotImplementedError()
 
 
 class MedianAndQuantileScaler(BaseScaler):
