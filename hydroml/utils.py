@@ -159,17 +159,34 @@ def get_full_metric_df(
     df_list = []
     for run_id in sorted_ids:
         run_path = f'{log_dir}/{experiment_id}/{run_id}'
-        loss_file = f'{run_path}/metrics/train_loss'
-        df = pd.read_csv(
-            loss_file,
-            delim_whitespace=True,
-            header=None,
-            index_col=2,
-            names=['time', 'train_loss']
-        )
-        df.index += iter_count
-        iter_count = df.iloc[-1].name
-        df_list.append(df)
+        loss_file = f'{run_path}/metrics/{metric_name}'
+        try:
+            df = pd.read_csv(
+                loss_file,
+                delim_whitespace=True,
+                header=None,
+                index_col=2,
+                names=['time',  metric_name]
+            )
+            df.index += iter_count
+            iter_count = df.iloc[-1].name
+            df_list.append(df)
+        except FileNotFoundError:
+            continue
 
     df = pd.concat(df_list)
     return df
+
+
+def save_state_dict_from_checkpoint(
+    log_dir,
+    experiment_name,
+    out_file,
+    uri_scheme='file:',
+    uri_authority='',
+):
+    ckpt_file = find_last_checkpoint(
+        log_dir, experiment_name
+    )
+    state_dict = torch.load(ckpt_file)['state_dict']
+    torch.save(state_dict, out_file)
