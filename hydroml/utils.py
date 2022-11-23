@@ -93,6 +93,7 @@ def find_resume_checkpoint(
     experiment_name,
     uri_scheme='file:',
     uri_authority='',
+    run_idx=1,
 ):
     tracking_uri = f'{uri_scheme}{uri_authority}{log_dir}'
     mlflow.set_tracking_uri(tracking_uri)
@@ -102,7 +103,7 @@ def find_resume_checkpoint(
     experiment_id = experiment.experiment_id
     runs = client.list_run_infos(experiment_id)
     # Assumes first run is current and second is the most recently completed
-    test_run = runs[1]
+    test_run = runs[run_idx]
     run_id = test_run.run_id
     run_path = f'{log_dir}/{experiment_id}/{run_id}'
     run_dict = mlflow.get_run(run_id).to_dictionary()
@@ -188,5 +189,21 @@ def save_state_dict_from_checkpoint(
     ckpt_file = find_last_checkpoint(
         log_dir, experiment_name
     )
-    state_dict = torch.load(ckpt_file)['state_dict']
+    state_dict = torch.load(ckpt_file, map_location=torch.device('cpu'))['state_dict']
     torch.save(state_dict, out_file)
+
+
+def load_state_dict_from_checkpoint(
+    log_dir,
+    experiment_name,
+    uri_scheme='file:',
+    uri_authority='',
+):
+    ckpt_file = find_last_checkpoint(
+        log_dir, experiment_name
+    )
+    state_dict = torch.load(
+        ckpt_file,
+        map_location=torch.device('cpu')
+    )['state_dict']
+    return state_dict
