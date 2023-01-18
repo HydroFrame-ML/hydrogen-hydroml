@@ -7,11 +7,11 @@ from tqdm.autonotebook import tqdm
 from pytorch_lightning import Callback
 from pytorch_lightning.callbacks import TQDMProgressBar
 
-def multiply_along_axis(A, B, axis, module=torch):
-    return module.swapaxes(module.swapaxes(A, axis, -1) * B, -1, axis)
+def sequence_to_device(seq, device):
+    return [s.to(device) for s in seq]
 
-def divide_along_axis(A, B, axis, module=torch):
-    return module.swapaxes(module.swapaxes(A, axis, -1) / B, -1, axis)
+def match_dims(x, target):
+    return x.reshape([len(x) if i == len(x) else 1 for i in target.shape])
 
 class MetricsCallback(Callback):
     """PyTorch Lightning metric callback."""
@@ -102,6 +102,7 @@ def find_resume_checkpoint(
     experiment = client.get_experiment_by_name(experiment_name)
     experiment_id = experiment.experiment_id
     runs = client.list_run_infos(experiment_id)
+    print(runs)
     # Assumes first run is current and second is the most recently completed
     test_run = runs[run_idx]
     run_id = test_run.run_id

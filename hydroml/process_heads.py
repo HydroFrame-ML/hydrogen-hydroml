@@ -36,69 +36,33 @@ class SaturationHead(nn.Module):
 
 
 class WaterTableDepthHead(nn.Module):
-    """
-    Calculate water table depth from the land surface
-    Adapted as directly as possible from pftools
-    """
     def __init__(self):
         super().__init__()
 
-    def forward(self, pressure,saturation,dz):
-        """
-        :param pressure: A nz-by-ny-by-nx ndarray of pressure values (bottom layer to top layer)
-        :param saturation: A nz-by-ny-by-nx ndarray of saturation values (bottom layer to top layer)
-        :param dz: An ndarray of shape (nz,) of thickness values (bottom layer to top layer)
-        :return: A ny-by-nx ndarray of water table depth values (measured from the top)
-
-        """
-           # Handle single-column pressure/saturation values
-        if pressure.ndim == 1:
-            pressure = pressure[:, None, None]
-        if saturation.ndim == 1:
-            saturation = saturation[:, None, None]
-
+    def forward(self, pressure, saturation, dz, depth_ax=1):
         domain_thickness = torch.sum(dz)
-
-        # Sentinel values padded to aid in subsequent calculations
-        # A layer of thickness 0 at the top
-        dz = torch.hstack([dz, torch.tensor(0)])
-        # An unsaturated layer at the top
-        # pad_width is a tuple of (n_before, n_after) for each dimension
-        saturation = F.pad(
-            saturation, ((0, 0, 0, 0, 0, 1)), mode='constant', value=0
+        dz = torch.hstack([dz, torch.tensor(0).to(pressure.device)])
+        unsat_placeholder = torch.mean(saturation, dim=depth_ax).unsqueeze(dim=depth_ax)
+        unsat_placeholder = torch.zeros_like(unsat_placeholder)
+        saturation = torch.cat([saturation, unsat_placeholder], dim=depth_ax)
+        elevation = torch.cumsum(dz, dim=0) - (dz/2)
+        elevation = elevation.reshape(
+            [1 if i != depth_ax else len(elevation) for i in range(len(pressure.shape))]
         )
 
-        # Elevation of the center of each layer from the bottom (bottom layer to top layer)
-        _elevation = torch.cumsum(dz,dim=0) - (dz / 2)
-        # Make 3D with shape (nz, 1, 1) to allow subsequent operations
-        _elevation = _elevation[:, None, None]
-
-        """
-        Indices of first unsaturated layer across the grid, going from bottom to top
-        with 0 indicating the bottom layer.
-        NOTE: np.argmax on a boolean array returns the index of the first True value it encounters.
-        It returns a 0 if it doesn't find *any* True values.
-        This would normally be a problem - however, since we added a sentinel 0 value to the sat array,
-        we will not encounter this case.
-        """
-
-        sat_layer = saturation < 1
-
+        sat_layer = (saturation < 1).float()
         z_indices = torch.maximum(
-            torch.argmax(sat_layer.float(), axis=0) - 1,  # find first unsaturated layer; back up one cell
-            torch.tensor(0)  # clamp min. index value to 0
-        )
-        # Make 3D with shape (1, ny, nx) to allow subsequent operations
-        z_indices = z_indices[None, ...]
+            torch.argmax(sat_layer, axis=depth_ax)-1,
+            torch.tensor(0).to(sat_layer.device)
+        ).unsqueeze(depth_ax)
+        saturation_elevation = torch.take_along_dim(elevation, z_indices, dim=depth_ax)
+        ponding_depth = torch.take_along_dim(pressure, z_indices, dim=depth_ax)
 
-        saturation_elevation = torch.take_along_dim(_elevation, z_indices, dim=0)  # shape (1, ny, nx)
-        ponding_depth = torch.take_along_dim(pressure, z_indices, dim=0)  # shape (1, ny, nx)
+        wt_height = saturation_elevation + ponding_depth
+        wt_height = torch.clip(wt_height, 0, domain_thickness)
 
-        wt_height = saturation_elevation + ponding_depth  # shape (1, ny, nx)
-        wt_height = torch.clip(wt_height, 0, domain_thickness)  # water table height clamped between 0<->domain thickness
-        wtd = domain_thickness - wt_height  # shape (1, ny, nx)
-
-        return wtd.squeeze(0)
+        wtd = domain_thickness - wt_height
+        return torch.squeeze(wtd, dim=depth_ax)
 
 
 class SurfaceStorageHead(nn.Module):

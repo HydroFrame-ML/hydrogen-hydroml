@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 def MWSE(y_hat, y_true, weights, dim=([0], [1]), norm_weights=True):
     weights = weights.to(y_hat.device)
@@ -7,18 +8,15 @@ def MWSE(y_hat, y_true, weights, dim=([0], [1]), norm_weights=True):
     return torch.mean(weighted_se)
 
 
-def DWSE(y_hat, y_true, lmda, loss_func):
-    std_loss = loss_func(y_hat, y_true)
-    
-    dx_true = y_true[...,0:-1]-y_true[...,1:]
-    dy_true = y_true[...,0:-1,:] - y_true[...,1:,:]
-        
-    dx_pred = y_hat[...,0:-1]-y_hat[...,1:]
-    dy_pred = y_hat[...,0:-1,:] - y_hat[...,1:,:]
+def DWSE(yhat, ytru, lmbda=8, loss_fun=F.mse_loss):
+    loss = loss_fun(ytru, yhat)
 
-    dx_loss = torch.mean(lmda*(abs(dx_pred-dx_true))) #This result is a grid of dx diff
-    dy_loss = torch.mean(lmda*(abs(dy_pred-dy_true))) #this result is a grid of dy diff
+    dx_tru = torch.diff(ytru, dim=-1)
+    dx_hat = torch.diff(yhat, dim=-1)
+    dx_loss = loss_fun(dx_tru, dx_hat)
 
-    deriv_loss = std_loss + dx_loss + dy_loss
+    dy_tru = torch.diff(ytru, dim=-2)
+    dy_hat = torch.diff(yhat, dim=-2)
+    dy_loss = loss_fun(dy_tru, dy_hat)
 
-    return deriv_loss
+    return loss + lmbda * (dx_loss + dy_loss)
