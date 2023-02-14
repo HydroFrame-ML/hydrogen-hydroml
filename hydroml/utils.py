@@ -7,6 +7,7 @@ from tqdm.autonotebook import tqdm
 from pytorch_lightning import Callback
 from pytorch_lightning.callbacks import TQDMProgressBar
 
+
 def multiply_along_axis(A, B, axis, module=torch):
     return module.swapaxes(module.swapaxes(A, axis, -1) * B, -1, axis)
 
