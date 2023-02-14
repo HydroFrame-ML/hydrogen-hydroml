@@ -7,6 +7,8 @@ import pickle
 import dill
 import torch.nn.functional as F
 
+import hydroml as hml
+
 
 def from_defaults(defaults):
     return {k: cls(**kwargs) for k, (cls, kwargs) in defaults.items()}
@@ -143,7 +145,6 @@ class MinMaxScaler(BaseScaler):
         self.eps = 1e-6
         self.x_min = x_min
         self.x_max = x_max
-        self.y_min, self.y_max = feature_range
 
     def fit(self, x):
         self.x_min = x.min()
@@ -151,13 +152,16 @@ class MinMaxScaler(BaseScaler):
 
     def transform(self, x):
         x_scaled = (x - self.x_min) / (self.x_max - self.x_min)
-        y = x_scaled * (self.y_max - self.y_min) + self.y_min
-        return y
+        return x_scaled
 
     def inverse_transform(self, y):
-        x = (y - self.y_min) / (self.y_max - self.y_min)
-        x = ((self.x_max - self.x_min) * x) + self.x_min
+        x = ((self.x_max - self.x_min) * y) + self.x_min
         return x#.view(orig_shape)
+
+    def tensor_inverse_transform(self, y):
+        xmax = hml.utils.match_dims(torch.tensor(self.x_max.values), y).to(y.dtype).to(y.device)
+        xmin = hml.utils.match_dims(torch.tensor(self.x_min.values), y).to(y.dtype).to(y.device)
+        return (xmax-xmin) * y + xmin
 
 
 class StandardScaler(BaseScaler):

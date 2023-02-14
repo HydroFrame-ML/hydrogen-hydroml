@@ -11,8 +11,14 @@ from pytorch_lightning.callbacks import TQDMProgressBar
 def multiply_along_axis(A, B, axis, module=torch):
     return module.swapaxes(module.swapaxes(A, axis, -1) * B, -1, axis)
 
-def divide_along_axis(A, B, axis, module=torch):
-    return module.swapaxes(module.swapaxes(A, axis, -1) / B, -1, axis)
+
+def sequence_to_device(seq, device):
+    return [s.to(device) for s in seq]
+
+
+def match_dims(x, target):
+    return x.reshape([len(x) if i == len(x) else 1 for i in target.shape])
+
 
 class MetricsCallback(Callback):
     """PyTorch Lightning metric callback."""
@@ -94,6 +100,7 @@ def find_resume_checkpoint(
     experiment_name,
     uri_scheme='file:',
     uri_authority='',
+    run_idx=1,
 ):
     tracking_uri = f'{uri_scheme}{uri_authority}{log_dir}'
     mlflow.set_tracking_uri(tracking_uri)
@@ -103,7 +110,7 @@ def find_resume_checkpoint(
     experiment_id = experiment.experiment_id
     runs = client.list_run_infos(experiment_id)
     # Assumes first run is current and second is the most recently completed
-    test_run = runs[1]
+    test_run = runs[run_idx]
     run_id = test_run.run_id
     run_path = f'{log_dir}/{experiment_id}/{run_id}'
     run_dict = mlflow.get_run(run_id).to_dictionary()
@@ -160,17 +167,50 @@ def get_full_metric_df(
     df_list = []
     for run_id in sorted_ids:
         run_path = f'{log_dir}/{experiment_id}/{run_id}'
-        loss_file = f'{run_path}/metrics/train_loss'
-        df = pd.read_csv(
-            loss_file,
-            delim_whitespace=True,
-            header=None,
-            index_col=2,
-            names=['time', 'train_loss']
-        )
-        df.index += iter_count
-        iter_count = df.iloc[-1].name
-        df_list.append(df)
+        loss_file = f'{run_path}/metrics/{metric_name}'
+        try:
+            df = pd.read_csv(
+                loss_file,
+                delim_whitespace=True,
+                header=None,
+                index_col=2,
+                names=['time',  metric_name]
+            )
+            df.index += iter_count
+            iter_count = df.iloc[-1].name
+            df_list.append(df)
+        except FileNotFoundError:
+            continue
 
     df = pd.concat(df_list)
     return df
+
+
+def save_state_dict_from_checkpoint(
+    log_dir,
+    experiment_name,
+    out_file,
+    uri_scheme='file:',
+    uri_authority='',
+):
+    ckpt_file = find_last_checkpoint(
+        log_dir, experiment_name
+    )
+    state_dict = torch.load(ckpt_file, map_location=torch.device('cpu'))['state_dict']
+    torch.save(state_dict, out_file)
+
+
+def load_state_dict_from_checkpoint(
+    log_dir,
+    experiment_name,
+    uri_scheme='file:',
+    uri_authority='',
+):
+    ckpt_file = find_last_checkpoint(
+        log_dir, experiment_name
+    )
+    state_dict = torch.load(
+        ckpt_file,
+        map_location=torch.device('cpu')
+    )['state_dict']
+    return state_dict
