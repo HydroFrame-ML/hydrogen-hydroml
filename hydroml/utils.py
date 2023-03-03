@@ -8,8 +8,8 @@ from pytorch_lightning import Callback
 from pytorch_lightning.callbacks import TQDMProgressBar
 
 
-def multiply_along_axis(A, B, axis, module=torch):
-    return module.swapaxes(module.swapaxes(A, axis, -1) * B, -1, axis)
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def sequence_to_device(seq, device):
