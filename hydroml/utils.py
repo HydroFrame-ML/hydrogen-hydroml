@@ -108,10 +108,10 @@ def find_resume_checkpoint(
 
     experiment = client.get_experiment_by_name(experiment_name)
     experiment_id = experiment.experiment_id
-    runs = client.list_run_infos(experiment_id)
+    runs = client.search_runs(experiment_id)
     # Assumes first run is current and second is the most recently completed
     test_run = runs[run_idx]
-    run_id = test_run.run_id
+    run_id = test_run.info.run_id
     run_path = f'{log_dir}/{experiment_id}/{run_id}'
     run_dict = mlflow.get_run(run_id).to_dictionary()
     checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
