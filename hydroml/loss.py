@@ -8,8 +8,14 @@ def MWSE(y_hat, y_true, weights, dim=([0], [1]), norm_weights=True):
     return torch.mean(weighted_se)
 
 
-def DWSE(yhat, ytru, lmbda=8, loss_fun=F.mse_loss):
+def DWSE(yhat, ytru, space_weight=4, time_weight=1, loss_fun=F.mse_loss):
+    # ytru = ytru[:, :, 0, ...]
+    # yhat = yhat[:, :, 0, ...]
     loss = loss_fun(ytru, yhat)
+
+    # dt_tru = torch.diff(ytru, dim=1)
+    # dt_hat = torch.diff(yhat, dim=1)
+    # dt_loss = loss_fun(dt_tru, dt_hat)
 
     dx_tru = torch.diff(ytru, dim=-1)
     dx_hat = torch.diff(yhat, dim=-1)
@@ -19,4 +25,4 @@ def DWSE(yhat, ytru, lmbda=8, loss_fun=F.mse_loss):
     dy_hat = torch.diff(yhat, dim=-2)
     dy_loss = loss_fun(dy_tru, dy_hat)
 
-    return loss + lmbda * (dx_loss + dy_loss)
+    return loss + space_weight * (dx_loss + dy_loss) #+ time_weight * dt_loss

@@ -37,7 +37,7 @@ class BaseScaler:
         self.fit(x)
         return self.transform(x)
 
-
+'''
 class OneHotScaler(BaseScaler):
 
     def __init__(self, num_classes=-1):
@@ -56,7 +56,37 @@ class OneHotScaler(BaseScaler):
     def inverse_transform(self, x):
         """Probably can be implemented with torch.argmax"""
         raise NotImplementedError()
+'''
 
+class OneHotScaler(object):
+    def __init__(self, num_classes=-1, name=''):
+        super().__init__()
+        self.num_classes = num_classes
+        self.name = name
+
+    def fit(self, x):
+        self.num_classes = torch.max(x)
+
+    def transform(self, x):
+        xt = torch.tensor(np.array(x, dtype=np.int64))
+        oh = F.one_hot(xt, num_classes=self.num_classes)
+        if len(oh.shape) == 4:
+            oh = oh.permute(0, 3, 1, 2)
+            dims = ('batch', f'{self.name}cat', 'y', 'x')
+        elif len(oh.shape) == 3:
+            oh = oh.permute(2, 0, 1)
+            dims = (f'{self.name}cat', 'y', 'x')
+        elif len(oh.shape) == 2:
+            dims = ('sample', f'{self.name}cat')
+
+        if isinstance(x, xr.DataArray):
+            x = xr.DataArray(oh.numpy(), dims=dims)
+            return x
+        return oh.numpy()
+
+    def inverse_transform(self, x):
+        """Probably can be implemented with torch.argmax"""
+        raise NotImplementedError()
 
 class MedianAndQuantileScaler(BaseScaler):
 

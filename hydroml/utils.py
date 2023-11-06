@@ -30,7 +30,8 @@ class MetricsCallback(Callback):
     #def on_train_start(self, trainer, pl_module):
     #    print(trainer.optimizers[0].state_dict())
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    #def on_validation_epoch_end(self, trainer, pl_module):
+    def train_epoch_end(self, trainer, pl_module):
         for k, v in trainer.logged_metrics.items():
             if k not in self.metrics.keys():
                 self.metrics[k] = [self._convert(v)]
@@ -132,10 +133,10 @@ def find_last_checkpoint(
 
     experiment = client.get_experiment_by_name(experiment_name)
     experiment_id = experiment.experiment_id
-    runs = client.list_run_infos(experiment_id)
-    latest = np.argmax([r.start_time for r in runs])
+    runs = client.search_runs(experiment_id)
+    latest = np.argmax([r.info.start_time for r in runs])
     test_run = runs[latest]
-    run_id = test_run.run_id
+    run_id = test_run.info.run_id
     run_path = f'{log_dir}/{experiment_id}/{run_id}'
     run_dict = mlflow.get_run(run_id).to_dictionary()
     checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
@@ -157,9 +158,9 @@ def get_full_metric_df(
 
     experiment = client.get_experiment_by_name(experiment_name)
     experiment_id = experiment.experiment_id
-    runs = client.list_run_infos(experiment_id)
-    run_ids = [r.run_id for r in runs]
-    start_times = [r.start_time for r in runs]
+    runs = client.search_runs(experiment_id)
+    run_ids = [r.info.run_id for r in runs]
+    start_times = [r.info.start_time for r in runs]
 
     sorted_idx = np.argsort(start_times)
     sorted_ids = [run_ids[i] for i in sorted_idx]
