@@ -1,3 +1,4 @@
+import os
 import torch
 import mlflow
 import numpy as np
@@ -96,6 +97,32 @@ def find_best_checkpoint(
     return best_checkpoint
 
 
+def find_all_checkpoints(
+    log_dir,
+    experiment_name,
+    uri_scheme='file:',
+    uri_authority='',
+    run_idx=1,
+):
+    tracking_uri = f'{uri_scheme}{uri_authority}{log_dir}'
+    mlflow.set_tracking_uri(tracking_uri)
+    client = mlflow.tracking.MlflowClient()
+
+    experiment = client.get_experiment_by_name(experiment_name)
+    experiment_id = experiment.experiment_id
+    runs = client.search_runs(experiment_id)
+    # Assumes first run is current and second is the most recently completed
+    test_run = runs[run_idx]
+    run_id = test_run.info.run_id
+    run_path = f'{log_dir}/{experiment_id}/{run_id}'
+    run_dict = mlflow.get_run(run_id).to_dictionary()
+    checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
+    checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'))
+    return checkpoints
+
+
+
+
 def find_resume_checkpoint(
     log_dir,
     experiment_name,
@@ -134,14 +161,23 @@ def find_last_checkpoint(
     experiment = client.get_experiment_by_name(experiment_name)
     experiment_id = experiment.experiment_id
     runs = client.search_runs(experiment_id)
-    latest = np.argmax([r.info.start_time for r in runs])
-    test_run = runs[latest]
-    run_id = test_run.info.run_id
-    run_path = f'{log_dir}/{experiment_id}/{run_id}'
-    run_dict = mlflow.get_run(run_id).to_dictionary()
-    checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
-    checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'))
-    last_checkpoint = checkpoints[-1]
+    latest = np.argsort([r.info.start_time for r in runs])[::-1]
+    try:
+        test_run = runs[latest[0]]
+        run_id = test_run.info.run_id
+        run_path = f'{log_dir}/{experiment_id}/{run_id}'
+        run_dict = mlflow.get_run(run_id).to_dictionary()
+        checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
+        checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'), key=os.path.getmtime)
+        last_checkpoint = checkpoints[-1]
+    except:
+        test_run = runs[latest[1]]
+        run_id = test_run.info.run_id
+        run_path = f'{log_dir}/{experiment_id}/{run_id}'
+        run_dict = mlflow.get_run(run_id).to_dictionary()
+        checkpoint_dir = run_dict['data']['params']['checkpoint_dir']
+        checkpoints = sorted(glob(f'{checkpoint_dir}/*.ckpt'), key=os.path.getmtime)
+        last_checkpoint = checkpoints[-1]
     return last_checkpoint
 
 
